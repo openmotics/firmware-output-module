@@ -29,7 +29,7 @@ DEFINE OSC 40
 
 VERSION                     con     6
 FIRMWARE                    con     0
-BUILT                       con     23                                                      
+BUILT                       con     26                                                      
 
 DEFINE  USE_LOWPRIORITY  1
 define  NO_CLRWDT        1     ; No automatic clear watchdog timer
@@ -98,6 +98,19 @@ Relay8On_3                  var     PORTC.1
 Relay8Off_3                 var     PORTC.0
 
 '-----------Constants and Variables for I2C-------------------------------------
+'hier module indicate
+NORMAL_MODE                     con     0   'Status led Green
+NORMAL_MODE_NOT_DISCOVERED      con     1   'Status led OFF
+NORMAL_MODE_BUS_ERRORS          con     2   'Status led Red blinking
+NORMAL_MODE_LOST_COMMUNICATION  con     3   'Status led Red
+INIT_MODE_DISCOVERED            con     4   'Status led Orange
+INIT_MODE_NOT_DISCOVERED        con     5   'Status led Orange blinking
+TEST_MODE_LED_ON                con     6   'During Test mode, switch status led ON in Green
+TEST_MODE_LED_OFF               con     7   'During Test mode, switch status led OFF
+BUS_OK                          con     0
+BUS_COMMUNICATION_ERRORS        con     1
+BUS_COMMUNICATION_LOST          con     2
+
 'Hier I2C
 SENT_START                  con     0
 REPEATED_START              con     1
@@ -141,6 +154,24 @@ LED_ON                      con     1
 LED_OFF                     con     0
 YES                         con     1
 NO                          con     0
+
+'hier module indicate
+STATUS_ON                   con     1
+STATUS_OFF                  con     0
+module_indicate_status      var     bit
+module_indicate_status=STATUS_OFF
+module_indicate_timer       var     word
+module_indicate_fl_timer    var     byte
+module_indicate_led_on      var     bit
+Status_mode                 var     byte
+Status_mode_old             var     byte
+Status_mode_old=255
+Bus_mode                    var     byte
+Bus_mode=BUS_OK
+bus_comm_error_timeout      var     word
+bus_comm_lost_timeout       var     word
+bus_comm_error_timeout=6250
+bus_comm_lost_timeout=6250
 
 'hier core
 CORE                        con     0
@@ -347,10 +378,10 @@ i2cData2                    var     byte
 i2cMode=0
 i2cInt=0
 
-LedCounter                  var     byte
-LedCounter=0
-LedAction                   var     bit
-LedAction=0
+'LedCounter                  var     byte
+'LedCounter=0
+'LedAction                   var     bit
+'LedAction=0
 RelayCounter                var     byte
 RelayCounter=0
 RelayAction                 var     bit
@@ -404,12 +435,13 @@ status_led_current_onoff    var     bit     'This is the status of the led itsel
 status_led_blink            var     bit
 status_led_counter          var     byte
 status_led_color            var     byte
+
 module_comm_counter         var     word
 bus_comm_counter            var     word
 module_comm_counter=9231                    '1 minute timeout
 bus_comm_counter=9231                       '1 minute timeout
-modechanged                 var     bit
-modechanged=NO
+'modechanged                 var     bit
+'modechanged=NO
 RED                         con     0
 GREEN                       con     1
 ORANGE                      con     2
@@ -559,13 +591,13 @@ pause 500
 gosub Indicate_mode_on_frontpanel
 'led_st_red=LED_OFF
 'led_st_green=LED_OFF
-status_led_onoff=LED_ON             'general status of the led (ON - blinking or normal, OFF) 
-status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
-status_led_blink=no                 'Led must blink or not
-status_led_color=GREen              'Color of the led
+'status_led_onoff=LED_ON             'general status of the led (ON - blinking or normal, OFF) 
+'status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
+'status_led_blink=no                 'Led must blink or not
+'status_led_color=GREen              'Color of the led
 status_led_counter=0                'only used when blinking is ON (then set at 77 (=500ms))
 gosub Switch_Shutter_off_after_startup
-gosub Set_status_led
+'gosub Set_status_led
 
 gosub Print_serial_number
 hserout2 ["Startup done F",dec version,".",dec firmware,".",dec built," ID (",Mod_NE,"): ",dec Mod_ID0,".",dec Mod_ID1,".",dec Mod_ID2,".",dec Mod_ID3,13,10,"------------------------------------",13,10] 
@@ -593,6 +625,9 @@ mainloop:
     gosub check_button_pressed 'Check button pressed
     'led change
     gosub check_status_led      'Check status led and set correctly, also set led linked to health status of the module
+    'hier module indicate
+    gosub Check_module_indicate
+    gosub check_bus_health    
 Goto mainloop
 
 '--------------------------------------------------------------------------
@@ -646,7 +681,11 @@ Timer2:   'interrupt every 6,5ms
     if status_led_counter>0 then status_led_counter=status_led_counter-1
     if module_comm_counter>0 then module_comm_counter=module_comm_counter-1
     if bus_comm_counter>0 then bus_comm_counter=bus_comm_counter-1
-         
+    'hier module indicate
+    if module_indicate_timer>0 then module_indicate_timer=module_indicate_timer-1
+    if module_indicate_fl_timer>0 then module_indicate_fl_timer=module_indicate_fl_timer-1
+    if bus_comm_error_timeout>0 then  bus_comm_error_timeout=bus_comm_error_timeout-1
+    if bus_comm_lost_timeout>0 then bus_comm_lost_timeout=bus_comm_lost_timeout-1             
     if timer=20 then 
         'high led_logo
         OutAlertOn=0
@@ -662,12 +701,12 @@ Timer2:   'interrupt every 6,5ms
             PowerSafe=1    'Led off again
             ButtonLedsOn=0
             OutalertUpdate=1        
-        endif
+        endif    
     endif
-    if LedCounter>0 then 
-        LedCounter=LedCounter-1
-        if LedCounter=0 then LedAction=1
-    endif  
+    'if LedCounter>0 then 
+    '    LedCounter=LedCounter-1
+    '    if LedCounter=0 then LedAction=1
+    'endif  
     if RelayCounter>0 then 
         RelayCounter=RelayCounter-1
         if RelayCounter=0 then RelayAction=1
@@ -713,6 +752,7 @@ Interprete_Serial: 'Interprete data coming from the RS485 bus
         RCSTA1.4=0               'disable receiving serial 1  
         InterpreteSer1=0
         if pointerser1>6 then
+            bus_comm_lost_timeout=6250        
             'delete
             'hserout2 ["Message received ",dec StackSer1[0]," ",dec StackSer1[1]," ",dec StackSer1[2]," ",dec StackSer1[3]," ",dec StackSer1[4]," ",dec StackSer1[5]," Mode=",dec mode,13,10]   
             if stackser1[0]="O" then  'output module
@@ -749,26 +789,11 @@ Interprete_broadcast:
     'hserout2 ["Broadcast received ",dec StackSer1[4]," ",dec StackSer1[5]," ",dec StackSer1[6],13,10]
     if stackser1[4]="L" and stackser1[5]="L" then   'Bus in Live mode
         if mode="I" then
-            'led change
-            'if startup_master==YES then                             'Put startup_master to NO when first direct message from Master to this module is received
-            '    if Mod_NE=="E" then
-            '        status_led_onoff=LED_ON             'general status of the led (ON - blinking or normal, OFF) 
-            '        status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
-            '        status_led_blink=no                 'Led must blink or not
-            '        status_led_color=RED                'Color of the led                            
-            '    else
-            '        status_led_onoff=LED_ON             'general status of the led (ON - blinking or normal, OFF) 
-            '        status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
-            '        status_led_blink=no                 'Led must blink or not
-            '        status_led_color=GREen              'Color of the led
-            '    endif
-            'else
-                status_led_onoff=LED_ON             'general status of the led (ON - blinking or normal, OFF) 
-                status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
-                status_led_blink=no                 'Led must blink or not
-                status_led_color=GREen              'Color of the led            
-            'endif
-            gosub Set_status_led
+            'status_led_onoff=LED_ON             'general status of the led (ON - blinking or normal, OFF) 
+            'status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
+            'status_led_blink=no                 'Led must blink or not
+            'status_led_color=GREen              'Color of the led            
+            'gosub Set_status_led
             hserout2 ["Live",13,10]                                                                                 
         endif  
         mode="L"
@@ -792,7 +817,7 @@ Interprete_broadcast:
         if StackSer1[15]=="C" then                            'CRC in message
             rs485_length=15
             automatic_module_search=YES
-            gosub check_init_led
+            'gosub check_init_led
             gosub Check_CRC16_in_RS485_message
             'hserout2 ["Search Module ",dec CRC.byte1," ",dec CRC.byte0," ",dec A_StackSer1[16]," ",dec A_StackSer1[17],13,10]
             if CRC.byte1==StackSer1[16] and CRC.byte0==StackSer1[17] then   'CRC OK
@@ -849,16 +874,79 @@ Interprete_broadcast:
     elseif stackser1[4]="T" and stackser1[5]="M" then   'Instruction only requested in Test Mode
         indicate=255
         Powersafe=0
-        status_led_onoff=LED_ON             'general status of the led (ON - blinking or normal, OFF) 
-        status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
-        status_led_blink=no                 'Led must blink or not
-        if status_led_color==GREEN then     'Color of the led
-            status_led_color=RED
-        else
-            status_led_color=GREEN
-        endif               
-        gosub Set_status_led
+        'status_led_onoff=LED_ON             'general status of the led (ON - blinking or normal, OFF) 
+        'status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
+        'status_led_blink=no                 'Led must blink or not
+        'if status_led_color==GREEN then     'Color of the led
+        '    status_led_color=RED
+        'else
+        '    status_led_color=GREEN
+        'endif               
+        'gosub Set_status_led
+        status_mode=TEST_MODE_LED_ON
         Gosub Test_instructions
+        
+    'hier module indicate    
+    elseif stackser1[4]=="M" and stackser1[5]=="I" then
+        hserout2 ["Indicate Rec for: ",dec stackser1[6],".",dec stackser1[7],".",dec stackser1[8],".",dec stackser1[9],13,10]                                                                 
+        'Instruction for Module Indicate
+        if stackser1[6]==Mod_ID0 and stackser1[7]==Mod_ID1 and stackser1[8]==Mod_ID2 and stackser1[9]==Mod_ID3 then     'Switch ON module indicate on this module
+            gosub Module_indicate_on
+        else                                                                                                            'Switch OFF module indicate
+            gosub Module_indicate_off
+        endif    
+    endif
+return
+
+'hier module indicate
+Module_indicate_off:
+    if module_indicate_status==STATUS_ON then   
+        module_indicate_status=STATUS_OFF
+        OutAlertOn=0                    'Normal led condition 
+        x=~out
+        gosub set_leds
+        gosub write_leds        
+        hserout2 ["Module indicate OFF",13,10]
+        'leds back to normal state
+    endif    
+return
+
+'hier module indicate
+Module_indicate_on:
+    module_indicate_status=STATUS_ON
+    module_indicate_timer=4687  '30000ms/6.4ms=4687
+    module_indicate_fl_timer=20
+    hserout2 ["Module indicate ON",13,10]   
+return
+
+'hier module indicate
+Check_module_indicate:
+    if module_indicate_status==STATUS_ON then
+        if module_indicate_fl_timer==0 then
+            module_indicate_fl_timer=20
+            toggle Module_indicate_led_on
+            if Module_indicate_led_on==YES then     'Switch ON leds
+                x=0
+            else                                    'Switch OFF leds
+                x=255
+            endif
+            gosub set_leds
+            gosub write_leds
+        endif
+        if module_indicate_timer==0 then
+            gosub module_indicate_off
+        endif
+    endif
+return
+
+Check_bus_health:
+    if bus_comm_error_timeout==0 then
+        Bus_mode=BUS_COMMUNICATION_ERRORS
+        if bus_comm_lost_timeout==0 then
+            Bus_mode=BUS_COMMUNICATION_LOST
+        endif
+    else
+        Bus_mode=BUS_OK      
     endif
 return
 
@@ -939,7 +1027,8 @@ Check_output_module:
     if stackser1[0]=Mod_id0 and stackser1[1]=Mod_id1 and stackser1[2]=Mod_id2 and stackser1[3]=Mod_id3 then
         'bootloader
         startup_master=NO
-        gosub Set_status_led
+        bus_comm_error_timeout=6250        
+        'gosub Set_status_led
         if Master_type=CORE then        'RS485 protocol V2 (only Core/Core+)
             if stackser1[4]="o" then    'Output command to set outputs
                 if StackSer1[15]=="C" then                            'CRC in message
@@ -982,11 +1071,12 @@ Check_output_module:
                             'hserout2 ["New Outconfig: ",bin8 OutConfig,13,10]
                             write 6,OutConfig
                         endif
-                        OutRec=Stackser1[5]                        
+                        OutRec=Stackser1[5] 
+                        'hserout2 ["0:out:",bin8 Out," OutRec:",bin8 OutRec,13,10]                       
                         if OutChangedByButton==YES or out<>OutRec then      'Frontpanel button used to make changes to the output(s)    
                             OutChangedByButton=NO
                             gosub rs485_send_status_output_changed
-                            hserout2 ["out:",bin8 Out," OutRec:",bin8 OutRec,13,10]
+                            hserout2 ["1:out:",bin8 Out," OutRec:",bin8 OutRec,13,10]
                         else                                'No changes have happened to outputs by using the frontpanel button
                             gosub rs485_send_status_no_changes    
                         endif
@@ -1133,23 +1223,26 @@ Set_rs485_in_receive_mode:
 return
 
 Display_AlertLeds:
-    if OutalertUpdate=1 then 'Led needs to be updated
-        OutAlertUpdate=0
-        if OutAlertOn=0 then 'Normal led condition
-            x=~out
-            gosub set_leds
-            gosub write_leds
-            'led_st_red=LED_OFF
-            'led_st_green=LED_OFF
-            gosub Set_status_led 
-        else                 'Inverted led condition
-            y=out^OutAlert
-            x=~y
-            gosub set_leds
-            gosub write_leds
-            'led_st_red=LED_ON
-            'led_st_green=LED_ON
-            gosub Set_status_led
+    'hier module indicate
+    if module_indicate_status==STATUS_OFF then          'only update leds if module indicate is not active
+        if OutalertUpdate=1 then 'Led needs to be updated
+            OutAlertUpdate=0
+            if OutAlertOn=0 then 'Normal led condition
+                x=~out
+                gosub set_leds
+                gosub write_leds
+                'led_st_red=LED_OFF
+                'led_st_green=LED_OFF
+                'gosub Set_status_led 
+            else                 'Inverted led condition
+                y=out^OutAlert
+                x=~y
+                gosub set_leds
+                gosub write_leds
+                'led_st_red=LED_ON
+                'led_st_green=LED_ON
+                'gosub Set_status_led
+            endif
         endif
     endif
 return
@@ -1467,47 +1560,13 @@ write_output:
     x=~out
     gosub set_leds
     gosub write_leds
-    'for i=0 to 7              'Check all outputs
-    '    x=outchanged>>i
-    '    y=out>>i
-    '    z=OutConfig>>i
-    '    if y.bit0==0 then RelayTimerOn[i]=255
-    '    if x.bit0==1 then        'output changed?
-    '        'hserout2 ["Output ",dec i," changed ",13,10]
-    '        if y.bit0==1 then      'output on or off?
-    '            if z.bit0==1 then 'switch on with delay off 650ms when it is a Curtain module
-    '                if OutDelay[i/2]==1 then  'switch Output ON with a delay?
-    '                    RelayTimerOn[i]=100
-    '                    'hserout2 ["Switch Output ",dec i," ON with a delay (",dec (i/2)," ",dec OutDelay[i/2],")",13,10] 
-    '                else 
-    '                    RelayTimerOn[i]=0
-    '                    'hserout2 ["Switch Output ",dec i," ON without delay (",dec (i/2)," ",dec OutDelay[i/2],")",13,10] 
-    '                endif
-    '            else 
-    '                RelayTimerOn[i]=0
-    '                'hserout2 ["Switch Output ",dec i," ON",13,10]  
-    '            endif   
-    '        else
-    '            RelayTimerOff[i]=0  'switch off without delay
-    '            'hserout2 ["Switch Output ",dec i," OFF",13,10]
-    '        endif
-    '    endif    
-    'next i
     'hserout2 ["/B",bin8 out,":",dec RelayTimerOn[0],"/",dec RelayTimerOff[0]," ",dec RelayTimerOn[1],"/",dec RelayTimerOff[1]," ",dec RelayTimerOn[2],"/",dec RelayTimerOff[2]," ",dec RelayTimerOn[3],"/",dec RelayTimerOff[3]," ",dec RelayTimerOn[4],"/",dec RelayTimerOff[4]," ",dec RelayTimerOn[5],"/",dec RelayTimerOff[5]," ",dec RelayTimerOn[6],"/",dec RelayTimerOff[6]," ",dec RelayTimerOn[7],"/",dec RelayTimerOff[7],13,10]    
     Outold=out
     CurrentOut=out
     if indicate<8 then
         OutAlert=%00000001<<indicate
-        OutAlertCounter=3077 '20 seconden
+        OutAlertCounter=3077 '20 seconden        
     endif
-    'if Mod_ID1==255 and Mod_ID2==255 and Mod_ID3==255 then   'Module is not configured
-    
-    'if outeeprom<>out then 
-    '    write 5,~out
-    '    outeeprom=out                                         'remember the outputs that are on
-    '    hserout2 ["Write OUT data in eeprom: ",bin8 outeeprom,13,10]
-    'endif
-    'hserout2 ["---------",13,10]
 return
 
 'write_output:
@@ -1650,17 +1709,17 @@ check_startupreset:
             status_led_onoff=LED_ON             'general status of the led (ON - blinking or normal, OFF) 
             status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
             status_led_blink=no                 'Led must blink or not
-            status_led_color=GREen              'Color of the led          
+            status_led_color=GREEN              'Color of the led          
             gosub Set_status_led
-            pause 100
+            pause 500
             'led_st_red=LED_OFF
             'led_st_green=LED_OFF
             status_led_onoff=LED_OFF            'general status of the led (ON - blinking or normal, OFF) 
             status_led_current_onoff=led_oFF    'current status of the led (when blinking, this variable will toggle)
             status_led_blink=no                 'Led must blink or not
-            status_led_color=GREen              'Color of the led          
+            status_led_color=GREEN              'Color of the led          
             gosub Set_status_led
-            pause 100 
+            pause 500 
         next s 
     endif    
 return
@@ -1781,7 +1840,7 @@ All_leds_on:
     status_led_onoff=LED_ON             'general status of the led (ON - blinking or normal, OFF) 
     status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
     status_led_blink=no                 'Led must blink or not
-    status_led_color=GREen              'Color of the led   
+    status_led_color=orange             'Color of the led   
     gosub Set_status_led    
 return
 
@@ -1891,15 +1950,15 @@ rs485_send_SI:      'Send message to the Master that the ID can be stored in the
     gosub Set_rs485_in_receive_mode
 return
 
-Check_init_led:
-    if automatic_module_search==YES and mode=="I" and Mod_NE=="E" then 
+'Check_init_led:
+'    if automatic_module_search==YES and mode=="I" and Mod_NE=="E" then 
         'status_led_onoff=LED_ON             'general status of the led (ON - blinking or normal, OFF) 
         'status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
         'status_led_blink=no                 'Led must blink or not
         'status_led_color=GREen              'Color of the led       
         'gosub Set_status_led     
-    endif
-return
+'    endif
+'return
 
 'hier Search Module
 Calc_CRC16:
@@ -1987,35 +2046,106 @@ return
 '  endif  
 'return
 
-Check_LedAction:
-    if LedAction=1 and mode="L" then
-        'led_st_red=LED_OFF
-        'led_st_green=LED_OFF
-        status_led_onoff=LED_OFF            'general status of the led (ON - blinking or normal, OFF) 
-        status_led_current_onoff=led_oFF    'current status of the led (when blinking, this variable will toggle)
-        status_led_blink=no                 'Led must blink or not
-        status_led_color=GREen              'Color of the led       
-        gosub Set_status_led
-        LedAction=0
-        Ledcounter=0
-    endif
-    if mode=="I" and modechanged==NO then
-        modechanged=YES
-        status_led_onoff=LED_ON             'general status of the led (ON - blinking or normal, OFF) 
+'hier module indicate
+Configure_status_led:
+    if status_mode==NORMAL_MODE then
+        status_led_onoff=LED_ON             'general status of the led (LED_ON, LED_OFF) 
         status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
-        if Mod_NE=="E" then
-            status_led_blink=NO             'Led must blink or not
-            hserout2 ["BLINK=NO",13,10] 
-        else
-            status_led_blink=YES            'Led must blink or not
-            hserout2 ["BLINK=YES",13,10] 
-        endif
-        status_led_color=ORANGE             'Color of the led       
-        gosub Set_status_led
-    elseif mode=="L" then
-        modechanged=NO        
+        status_led_blink=no                 'Led must blink or not
+        status_led_color=GREen              'Color of the led      
+    elseif status_mode==NORMAL_MODE_NOT_DISCOVERED then
+        status_led_onoff=LED_OFF            'general status of the led (LED_ON, LED_OFF)   
+    elseif status_mode==NORMAL_MODE_BUS_ERRORS then
+        status_led_onoff=LED_ON             'general status of the led (LED_ON, LED_OFF) 
+        status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
+        status_led_blink=YES                'Led must blink or not
+        status_led_color=RED                'Color of the led    
+    elseif status_mode==NORMAL_MODE_LOST_COMMUNICATION then
+        status_led_onoff=LED_ON             'general status of the led (LED_ON, LED_OFF) 
+        status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
+        status_led_blink=NO                 'Led must blink or not
+        status_led_color=RED                'Color of the led      
+    elseif status_mode==INIT_MODE_NOT_DISCOVERED then
+        status_led_onoff=LED_ON             'general status of the led (LED_ON, LED_OFF) 
+        status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
+        status_led_blink=YES                'Led must blink or not
+        status_led_color=ORANGE             'Color of the led      
+    elseif status_mode==INIT_MODE_DISCOVERED then
+        status_led_onoff=LED_ON             'general status of the led (LED_ON, LED_OFF) 
+        status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
+        status_led_blink=NO                 'Led must blink or not
+        status_led_color=ORANGE             'Color of the led
+    elseif status_mode==TEST_MODE_LED_ON then
+        status_led_onoff=LED_ON             'general status of the led (LED_ON, LED_OFF) 
+        status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
+        status_led_blink=YES                'Led must blink or not
+        status_led_color=ORANGE             'Color of the led            
+    else
+        status_led_onoff=LED_ON             'general status of the led (LED_ON, LED_OFF) 
+        status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
+        status_led_blink=no                 'Led must blink or not
+        status_led_color=GREEN              'Color of the led      
     endif
 return
+
+'hier module indicate 
+Check_LedAction:    
+    If mode=="L" then                                           'Live mode
+        if Mod_NE=="E" then                                     'Discovered
+            if Bus_mode==BUS_OK then                            'Bus is OK
+                status_mode=NORMAL_MODE
+            elseif Bus_mode==BUS_COMMUNICATION_ERRORS then      'Communication is detected but no communication on this module
+                status_mode=NORMAL_MODE_BUS_ERRORS
+            else                                                'No communication is detected
+                status_mode=NORMAL_MODE_LOST_COMMUNICATION      
+            endif
+        elseif Mod_NE=="N" then                                 'Not discovered yet
+            status_mode=NORMAL_MODE_NOT_DISCOVERED                
+        endif
+    else                                                        'Init mode
+        if Mod_NE=="N" then                                     'Not discovered yet
+            status_mode=INIT_MODE_NOT_DISCOVERED
+        else                                                    'Discovered
+            status_mode=INIT_MODE_DISCOVERED
+        endif
+    endif
+    if Status_mode_old<>Status_mode then
+        gosub configure_status_led
+        gosub Set_status_led
+    endif
+    Status_mode_old=Status_mode
+return
+
+'Check_LedAction:
+'    'if LedAction=1 and mode="L" then
+'    if mode="L" then
+'        'led_st_red=LED_OFF
+'        'led_st_green=LED_OFF
+'        status_led_onoff=LED_OFF            'general status of the led (ON - blinking or normal, OFF) 
+'        status_led_current_onoff=led_oFF    'current status of the led (when blinking, this variable will toggle)
+'        status_led_blink=no                 'Led must blink or not
+'        status_led_color=GREen              'Color of the led       
+'        gosub Set_status_led
+'        'LedAction=0
+'        'Ledcounter=0
+'    endif
+'    if mode=="I" and modechanged==NO then
+'        modechanged=YES
+'        status_led_onoff=LED_ON             'general status of the led (ON - blinking or normal, OFF) 
+'        status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
+'        if Mod_NE=="E" then
+'            status_led_blink=NO             'Led must blink or not
+'            hserout2 ["BLINK=NO",13,10] 
+'        else
+'            status_led_blink=YES            'Led must blink or not
+'            hserout2 ["BLINK=YES",13,10] 
+'        endif
+'        status_led_color=ORANGE             'Color of the led       
+'        gosub Set_status_led
+'    elseif mode=="L" then
+'        modechanged=NO        
+'    endif
+'return
 
 Check_RelayAction:
     if RelayAction=1 then
