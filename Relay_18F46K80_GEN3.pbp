@@ -29,7 +29,7 @@ DEFINE OSC 40
 
 VERSION                     con     6
 FIRMWARE                    con     0
-BUILT                       con     26                                                      
+BUILT                       con     27                                                      
 
 DEFINE  USE_LOWPRIORITY  1
 define  NO_CLRWDT        1     ; No automatic clear watchdog timer
@@ -128,7 +128,10 @@ SENT_STOP                   CON     12
 CHECK_INTERRUPT             con     13
 ENABLE_RECEIVING            con     14
 RECEIVE_DATA                con     15
-PROCESS_DONE                con     16
+'hier eeprom
+WAIT_WRITE                  con     16
+PROCESS_DONE                con     17
+
 MAXI2CBYTES                 con     5
 MAXI2CSTEPS                 con     45
 TCA9539_0_ADDRESS           con     %11101010  'Chip for leds and buttons
@@ -137,6 +140,8 @@ MAX7312_0_ADDRESS           con     %01001010  'Alternative Chip for leds and bu
 MAX7312_1_ADDRESS           con     %01001100  'Alternative Chip for leds
 M24C02_ADDRESS              CON     %10101100
 LM75_ADDRESS                con     %10011110
+'hier eeprom
+M24LC024_ADDRESS            con     %10101010  'External eeprom on Base panel to store serial number and test information 
 
 TCA9539_0_OK                con     %00000001
 TCA9539_1_OK                con     %00000010
@@ -147,6 +152,35 @@ LM75_OK                     con     %00100000
 
 PRESSED                     con     0
 RELEASED                    con     1
+
+'hier eeprom
+INT_TO_EXT                  con     0
+EXT_TO_INT                  con     1
+NO_SYNC                     con     2
+
+'hier eeprom
+INT_EEP_DAY_ADDRESS         con     242     'eeprom addresses for serial number
+EXT_EEP_DAY_ADDRESS         con     242
+INT_EEP_MONTH_ADDRESS       con     241
+EXT_EEP_MONTH_ADDRESS       con     241
+INT_EEP_YEAR_ADDRESS        con     240
+EXT_EEP_YEAR_ADDRESS        con     240
+
+INT_EEP_PROD_ADDRESS        con     243
+INT_EEP_SER_MSB_ADDRESS     con     244
+INT_EEP_SER_LSB_ADDRESS     con     245
+INT_EEP_ERR_ADDRESS         con     246
+
+PROTECTED_AREA_START        con     240
+PROTECTED_AREA_END          con     246
+INTERNAL_EEPROM_SIZE        con     1024
+
+SYNC_RANGE1_START           CON     0
+SYNC_RANGE1_END             con     255
+SYNC_RANGE2_START           CON     200
+SYNC_RANGE2_END             con     255
+SYNC_RANGE3_START           CON     256
+SYNC_RANGE3_END             con     351
 
 MAXRS485LENGTH              con     11  'Max length (in RS485 message) that can be used. Cannot be increased without changing variables A_Queue_...
 
@@ -211,6 +245,20 @@ Output1on                   var     bit
 Output0onOld                var     bit
 Output1onOld                var     bit
 
+'hier eeprom
+Ext_eeprom_found            var     bit
+Ext_eeprom_found=NO
+Eeprom_sync_direction       var     byte
+day                         var     byte
+month                       var     byte
+year                        var     byte
+i_word                      var     word
+data_byte                   var     byte
+data_byte2                  var     byte
+eeprom_address              var     byte
+eeprom_data                 var     byte
+Dummybyte                   var     byte
+
 i2c_hw_ok=0
 tca9539_data0=65535
 tca9539_data1=65535
@@ -220,6 +268,12 @@ tca9539_data1_old=0
 RESET_PIN                   VAR     PORTE.1   'Reset pin of TCA9538 (gnd to reset)
 INTERRUPT_PIN               VAR     PORTE.2   'Interrupt pin from TCA9538
 LED_STATUS                  VAR     PORTE.1   'for non GEN3 hw
+
+'hier eeprom
+WP                          var     PORTA.1   'Write Potect external eeprom/fram
+WP1                         var     PORTA.0
+WP=YES
+WP1=YES
                                        
 output  RESET_PIN 
 high    RESET_PIN 
@@ -446,23 +500,6 @@ RED                         con     0
 GREEN                       con     1
 ORANGE                      con     2
 
-read 240,Serial_year
-read 241,Serial_month
-read 242,Serial_day
-read 243,Serial_prod_company
-read 244,Serial_number.byte1
-read 245,Serial_number.byte0
-read 246,Serial_errors
-if serial_year>99 or serial_month==0 or serial_month>12 or serial_day==0 or serial_day>31 then
-    Serial_year=0
-    Serial_month=0
-    Serial_day=0
-    Serial_prod_company=0
-    Serial_number.byte1=0
-    Serial_number.byte0=0
-    Serial_errors=0
-endif
-
 CLEARWDT
 gosub AllRelaysOff
 
@@ -522,56 +559,17 @@ RCSTA2.4=1  'disable UART2 receiver
 TXSTA2.5=1  'enable UART2 transmit
 
 'hier i2c
+
+'hier eeprom
+gosub check_ext_eeprom
+gosub Set_eeprom_sync_direction
+gosub sync_eeprom
+gosub Read_startup_data_eeprom
+CLEARWDT
+
 gosub detect_i2c_chips
 gosub check_startupreset  'check if reset 
 
-read 0,Mod_NE        'Mode_ID in eeprom controller
-read 1,Mod_ID0
-read 2,Mod_ID1
-read 3,Mod_ID2
-read 4,Mod_ID3
-'read 5,outeeprom
-'outeeprom=~OutEeprom
-read 6,OutConfig
-hserout2 ["Raw Outconfig: ",bin8 OutConfig,13,10]
-gosub Check_OutConfig
-hserout2 ["Outconfig: ",bin8 OutConfig,13,10]
-'hier Core
-read 10,Master_type     'Read which is the Master type (Traditional master or Core/Core+) that has initialised this module
-if master_type==UNKNOWN then master_type=CORE
-hserout2 ["Master Type: ",dec Master_type,13,10]
-
-if Mod_ID0<>"O" and Mod_ID0<>"R" then   'Module not configured is standard and Output module
-  Mod_ID0 = "O"                         '"O"-> Output Module, "R"-> Restricted Output for curtains for example
-endif
-
-if Mod_NE==255 then Mod_NE="N"
-if Mod_NE=="N" and Mod_ID1==255 and Mod_ID2==255 and Mod_ID3==255 and OutConfig<>0 then
-    write 6,0
-    Outconfig=0                         'All outputs are configured as output (Not Roller/shutter)
-    hserout2 ["Reset Outconfig ",dec Outconfig,13,10]
-endif    
-
-'bootloader, see http://wiki.openmotics.com/index.php/Bootloader
-read 64,x    'Read Hardware version
-if x<>hardware then 
-  write 64,hardware
-endif
-read 65,x    'Read Major firmware version
-if x<>version then 
-  write 65,version
-endif
-read 66,x    'Read Minor firmware version
-if x<>firmware then 
-  write 66,firmware
-endif
-read 67,x    'Read Minor firmware version
-if x<>built then 
-  write 67,built
-endif 
-read 74,x    'Read Flashmode variable and put on 5 so the bootloader knows the app is running, 5 retries 
-write 74,5
-write 75,0    'Set Bootloader time on 0 seconds 
 out=0         'All outputs off
 OutOld=0
 'gosub write_output
@@ -766,13 +764,7 @@ Interprete_Serial: 'Interprete data coming from the RS485 bus
                 hserout2 ["Factory reset request",13,10]
                 if mode=="I" and stackser1[4]=="F" and stackser1[5]=="R" and stackser1[6]==17 and stackser1[7]==69 then 'Bus in Init mode and valid message received?
                     hserout2 ["Valid request, execute factory reset",13,10]
-                    write 0,255        'Mode_ID in eeprom controller
-                    write 1,255
-                    write 2,255
-                    write 3,255
-                    write 4,255
-                    write 6,255
-                    hserout2 ["Clear ID",13,10]
+                    gosub clear_id
                     pause 5
                     asm
                         reset
@@ -783,6 +775,16 @@ Interprete_Serial: 'Interprete data coming from the RS485 bus
         pointerser1=0
         RCSTA1.4=1            'enable receiving serial 1
     endif
+return
+
+Clear_id:
+    for i=0 to 6
+        write i,255             
+        eeprom_address=i            'addressing
+        eeprom_data=255             'Eeprom data
+        gosub write_eeprom                     
+    next i
+    hserout2 ["Clear ID",13,10]
 return
 
 Interprete_broadcast:
@@ -985,13 +987,34 @@ Test_instructions:
             Serial_number.byte0=stackser1[13]
             Serial_errors=stackser1[14]
             hserout2 ["Data Received: ",dec Serial_year," ",dec Serial_month," ",dec Serial_day," ",dec Serial_prod_company," ",dec serial_number," ",dec Serial_errors,13,10]
-            write 240,Serial_year
-            write 241,Serial_month
-            write 242,Serial_day
-            write 243,Serial_prod_company
-            write 244,Serial_number.byte1
-            write 245,Serial_number.byte0
-            write 246,Serial_errors
+            write INT_EEP_YEAR_ADDRESS,Serial_year
+            eeprom_address=INT_EEP_YEAR_ADDRESS         'addressing
+            eeprom_data=Serial_year                     'Eeprom data
+            gosub write_eeprom             
+            write INT_EEP_MONTH_ADDRESS,Serial_month
+            eeprom_address=INT_EEP_MONTH_ADDRESS        'addressing
+            eeprom_data=Serial_month                    'Eeprom data
+            gosub write_eeprom             
+            write INT_EEP_DAY_ADDRESS,Serial_day
+            eeprom_address=INT_EEP_DAY_ADDRESS          'addressing
+            eeprom_data=Serial_day                      'Eeprom data
+            gosub write_eeprom             
+            write INT_EEP_PROD_ADDRESS,Serial_prod_company
+            eeprom_address=INT_EEP_PROD_ADDRESS         'addressing
+            eeprom_data=Serial_prod_company             'Eeprom data
+            gosub write_eeprom             
+            write INT_EEP_SER_MSB_ADDRESS,Serial_number.byte1
+            eeprom_address=INT_EEP_SER_MSB_ADDRESS      'addressing
+            eeprom_data=Serial_number.byte1             'Eeprom data
+            gosub write_eeprom             
+            write INT_EEP_SER_LSB_ADDRESS,Serial_number.byte0
+            eeprom_address=INT_EEP_SER_LSB_ADDRESS      'addressing
+            eeprom_data=Serial_number.byte0             'Eeprom data
+            gosub write_eeprom            
+            write INT_EEP_ERR_ADDRESS,Serial_errors
+            eeprom_address=INT_EEP_ERR_ADDRESS          'addressing
+            eeprom_data=Serial_errors                   'Eeprom data
+            gosub write_eeprom 
             gosub Print_serial_number
         endif                
         high RS485_mode     'send mode
@@ -1070,6 +1093,9 @@ Check_output_module:
                             gosub Check_OutConfig
                             'hserout2 ["New Outconfig: ",bin8 OutConfig,13,10]
                             write 6,OutConfig
+                            eeprom_address=6                                'addressing
+                            eeprom_data=OutConfig                           'Eeprom data
+                            gosub write_eeprom
                         endif
                         OutRec=Stackser1[5] 
                         'hserout2 ["0:out:",bin8 Out," OutRec:",bin8 OutRec,13,10]                       
@@ -1091,6 +1117,9 @@ Check_output_module:
                 gosub send_F_response                 
             elseif stackser1[4]="F" and stackser1[5]="R" then   'Perform Reset of the module
                 write 75,stackser1[6]                            'Write number of seconds that this module must remain in bootloader mode
+                eeprom_address=75                               'addressing
+                eeprom_data=stackser1[6]                        'Eeprom data
+                gosub write_eeprom                
                 s1="R"
                 gosub send_F_response
                 pause 5
@@ -1133,6 +1162,9 @@ Check_output_module:
                 gosub send_F_response   
             elseif stackser1[4]="F" and stackser1[5]="R" then  'Perform Reset of the module
                 write 75,stackser1[6]                            'Write number of seconds that this module must remain in bootloader mode
+                eeprom_address=75                               'addressing
+                eeprom_data=stackser1[6]                        'Eeprom data
+                gosub write_eeprom                
                 s1="R"
                 gosub send_F_response
                 pause 5
@@ -1164,9 +1196,15 @@ Remote_eeprom_write:
             read rs485_eeprom_address,x
             if x==255 then      'If not programmed then it can be modified
                 write rs485_eeprom_address,rs485_eeprom_byte
+                eeprom_address=rs485_eeprom_address             'addressing
+                eeprom_data=rs485_eeprom_byte                   'Eeprom data
+                gosub write_eeprom
             endif
         else
-            write rs485_eeprom_address,rs485_eeprom_byte 
+            write rs485_eeprom_address,rs485_eeprom_byte
+            eeprom_address=rs485_eeprom_address                 'addressing
+            eeprom_data=rs485_eeprom_byte                       'Eeprom data
+            gosub write_eeprom             
         endif
         read rs485_eeprom_address,rs485_eeprom_byte
     endif                        
@@ -1697,12 +1735,7 @@ check_startupreset:
         pause 50
     next s
     if test=1 then
-        write 0,255        'Mode_ID in eeprom controller
-        write 1,255
-        write 2,255
-        write 3,255
-        write 4,255
-        hserout2 ["Clear ID",13,10]
+        gosub clear_id
         for s=0 to 3
             'led_st_red=LED_ON
             'led_st_green=LED_ON
@@ -2001,12 +2034,30 @@ activate_device:
                 if CRC.byte1==StackSer1[16] and CRC.byte0==StackSer1[17] then
                     hserout2 ["CORE: CRC ",dec StackSer1[16]," ",dec StackSer1[17]," ",dec CRC.byte1," ",dec CRC.byte0,13,10]
                     Mod_NE="E"
-                    write 0,Mod_NE          'Mode_ID in eeprom controller
+                    write 0,Mod_NE              'Mode_ID in eeprom controller
+                    eeprom_address=0            'addressing
+                    eeprom_data=Mod_NE          'Eeprom data
+                    gosub write_eeprom                     
                     write 1,Mod_ID0
+                    eeprom_address=1            'addressing
+                    eeprom_data=Mod_ID0         'Eeprom data
+                    gosub write_eeprom                    
                     write 2,Mod_ID1
+                    eeprom_address=2            'addressing
+                    eeprom_data=Mod_ID1         'Eeprom data
+                    gosub write_eeprom                    
                     write 3,Mod_ID2
+                    eeprom_address=3            'addressing
+                    eeprom_data=Mod_ID2         'Eeprom data
+                    gosub write_eeprom                    
                     write 4,Mod_ID3
+                    eeprom_address=4            'addressing
+                    eeprom_data=Mod_ID3         'Eeprom data
+                    gosub write_eeprom                    
                     write 10,CORE
+                    eeprom_address=10           'addressing
+                    eeprom_data=CORE            'Eeprom data
+                    gosub write_eeprom                    
                     Master_type=CORE
                     'status_led_onoff=LED_ON             'general status of the led (ON - blinking or normal, OFF) 
                     'status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
@@ -2020,12 +2071,30 @@ activate_device:
                 if CRC.byte1==StackSer1[16] and CRC.byte0==StackSer1[17] then
                     hserout2 ["MASTER: CRC ",dec StackSer1[16]," ",dec StackSer1[17]," ",dec CRC.byte1," ",dec CRC.byte0,13,10]
                     Mod_NE="E"
-                    write 0,Mod_NE          'Mode_ID in eeprom controller
+                    write 0,Mod_NE              'Mode_ID in eeprom controller
+                    eeprom_address=0            'addressing
+                    eeprom_data=Mod_NE          'Eeprom data
+                    gosub write_eeprom                     
                     write 1,Mod_ID0
+                    eeprom_address=1            'addressing
+                    eeprom_data=Mod_ID0         'Eeprom data
+                    gosub write_eeprom                    
                     write 2,Mod_ID1
+                    eeprom_address=2            'addressing
+                    eeprom_data=Mod_ID1         'Eeprom data
+                    gosub write_eeprom                    
                     write 3,Mod_ID2
+                    eeprom_address=3            'addressing
+                    eeprom_data=Mod_ID2         'Eeprom data
+                    gosub write_eeprom                    
                     write 4,Mod_ID3
-                    write 10,TRADITIONAL_MASTER                
+                    eeprom_address=4            'addressing
+                    eeprom_data=Mod_ID3         'Eeprom data
+                    gosub write_eeprom                    
+                    write 10,TRADITIONAL_MASTER
+                    eeprom_address=10               'addressing
+                    eeprom_data=TRADITIONAL_MASTER  'Eeprom data
+                    gosub write_eeprom                 
                     Master_type=TRADITIONAL_MASTER
                 endif
             endif          
@@ -2354,6 +2423,183 @@ return
 '    endif
 'return
 
+'hier eeprom
+Check_Ext_Eeprom:
+    i2cCommandCode=255                  'Read value address 255
+    gosub Set_parameters_I2C_read_M24LC024
+    gosub I2C_read_write
+    if Err==NO then
+        Ext_eeprom_found=YES
+        'delete
+        hserout2 ["Ext. EEPROM found",13,10]
+    else
+        Ext_eeprom_found=NO
+        'delete
+        hserout2 ["No Ext. EEPROM found - Error",13,10]                       
+    endif
+return
+
+'hier eeprom
+Set_eeprom_sync_direction:
+    read INT_EEP_DAY_ADDRESS,day
+    read INT_EEP_MONTH_ADDRESS,month
+    read INT_EEP_YEAR_ADDRESS,year
+    if Ext_eeprom_found==YES then                       'External eeprom OK    
+        if day>0 and day<32 and month>0 and month<13 and year<100 then  'Valid serial number found in internal eeprom
+            eeprom_sync_direction=INT_TO_EXT
+            'delete
+            hserout2 ["0:Eeprom Sync direction: Int -> Ext",13,10]    
+        else                                                            'No valid serial number found in internal eeprom
+            i2cCommandCode=EXT_EEP_DAY_ADDRESS      'Eeprom address
+            gosub Set_parameters_I2C_read_M24LC024
+            gosub I2C_read_write
+            day=i2cdata[0]
+            i2cCommandCode=EXT_EEP_MONTH_ADDRESS    'Eeprom address
+            gosub Set_parameters_I2C_read_M24LC024
+            gosub I2C_read_write
+            month=i2cdata[0]
+            i2cCommandCode=EXT_EEP_YEAR_ADDRESS     'Eeprom address
+            gosub Set_parameters_I2C_read_M24LC024
+            gosub I2C_read_write
+            year=i2cdata[0]
+            if day>0 and day<32 and month>0 and month<13 and year<100 then   'External eeprom is not OK either, serial number is missing                
+                eeprom_sync_direction=EXT_TO_INT
+                'delete
+                hserout2 ["1:Eeprom Sync direction: Ext -> Int",13,10]                 
+            else                                            'External eeprom is OK
+                eeprom_sync_direction=NO_SYNC               'No syncing
+                'delete
+                hserout2 ["1:Eeprom Sync direction: No Sync",13,10]   
+            endif                    
+        endif
+    else                                                'No eeprom
+        eeprom_sync_direction=NO_SYNC               'No syncing
+        'delete
+        hserout2 ["2:Eeprom Sync direction: No Sync",13,10]     
+    endif  
+return
+
+'hier eeprom
+sync_eeprom:
+    if Ext_eeprom_found==YES and eeprom_sync_direction<>NO_SYNC then
+        for i=SYNC_RANGE1_START to SYNC_RANGE1_END            'Addresses internal eeprom are the same as external eeprom/fram
+            gosub Write_sync_data       
+        next i
+'        for i=SYNC_RANGE2_START to SYNC_RANGE2_END            'Addresses internal eeprom are the same as external eeprom/fram
+'            gosub Write_sync_data       
+'        next i        
+'        for i_word=SYNC_RANGE3_START to SYNC_RANGE3_END       'Addresses internal eeprom are NOT the same as external eeprom/fram
+'            read i_word,data_byte
+'            i2cCommandCode=(i_word-156)     're-addressing          
+'            gosub Set_parameters_I2C_read_M24LC024
+'            gosub I2C_read_write
+'            data_byte2=i2cdata[0]
+'            if data_byte<>data_byte2 then
+'                if eeprom_sync_direction==INT_TO_EXT then   'Write External eeprom
+'                    i2cCommandCode=(i_word-156)             're-addressing
+'                    i2cCommandData=data_byte                'Eeprom data
+'                    gosub Set_parameters_I2C_write_M24LC024
+'                    gosub I2C_read_write
+'                    'delete
+'                    hserout2 ["Write Ext Eeprom ",dec3 i_word,"=",dec data_byte,13,10]
+'                else                                        'Wite Internal eeprom
+'                    write i_word,data_byte2
+'                    'delete
+'                    hserout2 ["Write Int Eeprom ",dec3 i_word,"=",dec data_byte2,13,10]
+'                endif                
+'            endif                
+'        next i_word        
+    endif
+return
+
+'hier eeprom
+Write_sync_data:
+    read i,data_byte
+    i2cCommandCode=i            
+    gosub Set_parameters_I2C_read_M24LC024
+    gosub I2C_read_write
+    data_byte2=i2cdata[0]
+    if data_byte<>data_byte2 then
+        if eeprom_sync_direction==INT_TO_EXT then   'Write External eeprom
+            i2cCommandCode=i                        'Eeprom address
+            i2cCommandData=data_byte                'Eeprom data
+            gosub Set_parameters_I2C_write_M24LC024
+            gosub I2C_read_write
+            'delete
+            hserout2 ["Write Ext Eeprom ",dec3 i,"=",dec data_byte,13,10]
+        else                                        'Write Internal eeprom
+            write i,data_byte2
+            'delete
+            hserout2 ["Write Int Eeprom ",dec3 i,"=",dec data_byte2,13,10]
+        endif                    
+    endif
+return
+
+'hier eeprom
+Read_startup_data_eeprom:
+    read 0,Mod_NE        'Mode_ID in eeprom controller
+    read 1,Mod_ID0
+    read 2,Mod_ID1
+    read 3,Mod_ID2
+    read 4,Mod_ID3
+    'read 5,outeeprom
+    'outeeprom=~OutEeprom
+    read 6,OutConfig
+    hserout2 ["Raw Outconfig: ",bin8 OutConfig,13,10]
+    gosub Check_OutConfig
+    hserout2 ["Outconfig: ",bin8 OutConfig,13,10]
+    'hier Core
+    read 10,Master_type     'Read which is the Master type (Traditional master or Core/Core+) that has initialised this module
+    if master_type==UNKNOWN then master_type=CORE
+    hserout2 ["Master Type: ",dec Master_type,13,10]
+    if Mod_ID0<>"O" and Mod_ID0<>"R" then   'Module not configured is standard and Output module
+        Mod_ID0 = "O"                         '"O"-> Output Module, "R"-> Restricted Output for curtains for example
+    endif
+    if Mod_NE==255 then Mod_NE="N"
+    if Mod_NE=="N" and Mod_ID1==255 and Mod_ID2==255 and Mod_ID3==255 and OutConfig<>0 then
+        write 6,0
+        Outconfig=0                         'All outputs are configured as output (Not Roller/shutter)
+        hserout2 ["Reset Outconfig ",dec Outconfig,13,10]
+    endif    
+    'bootloader, see http://wiki.openmotics.com/index.php/Bootloader
+    read 64,x    'Read Hardware version
+    if x<>hardware then 
+        write 64,hardware
+    endif
+    read 65,x    'Read Major firmware version
+    if x<>version then 
+        write 65,version
+    endif
+    read 66,x    'Read Minor firmware version
+    if x<>firmware then 
+        write 66,firmware
+    endif
+    read 67,x    'Read Minor firmware version
+    if x<>built then 
+        write 67,built
+    endif 
+    read 74,x    'Read Flashmode variable and put on 5 so the bootloader knows the app is running, 5 retries 
+    write 74,5
+    write 75,0    'Set Bootloader time on 0 seconds
+    read INT_EEP_YEAR_ADDRESS,Serial_year
+    read INT_EEP_MONTH_ADDRESS,Serial_month
+    read INT_EEP_DAY_ADDRESS,Serial_day
+    read INT_EEP_PROD_ADDRESS,Serial_prod_company
+    read INT_EEP_SER_MSB_ADDRESS,Serial_number.byte1
+    read INT_EEP_SER_LSB_ADDRESS,Serial_number.byte0
+    read INT_EEP_ERR_ADDRESS,Serial_errors
+    if serial_year>99 or serial_month==0 or serial_month>12 or serial_day==0 or serial_day>31 then
+        Serial_year=0
+        Serial_month=0
+        Serial_day=0
+        Serial_prod_company=0
+        Serial_number.byte1=0
+        Serial_number.byte0=0
+        Serial_errors=0
+    endif     
+    read 130,DummyByte      'set pointer to place 130, if brown out or others happens, the current addresses won't be affected     
+return
+
 Check_button_pressed:
     if (i2c_hw_ok & TCA9539_0_OK)>0 or (i2c_hw_ok & MAX7312_0_OK)>0 then
         if INTERRUPT_PIN=0 then  'one of the button's is pressed
@@ -2558,6 +2804,56 @@ write_LM75_data:
     i2cCommandData1=0
     gosub Set_parameters_I2C_write_LM75
     gosub I2C_read_write
+return
+
+'hier eeprom
+Set_parameters_I2C_write_M24LC024:
+    i2ccont=M24LC024_ADDRESS        
+    WP=NO                       'Switch off write protection
+    WP1=NO
+    I2cStep[0]=SENT_START
+    I2cStep[1]=CHECK_INTERRUPT
+    I2cStep[2]=SENT_ADDRESS_W
+    I2cStep[3]=CHECK_INTERRUPT
+    I2cStep[4]=CHECK_ACK
+    I2cStep[5]=SENT_COMMANDCODE
+    I2cStep[6]=CHECK_INTERRUPT
+    I2cStep[7]=CHECK_ACK
+    I2cStep[8]=SENT_COMMANDDATA
+    I2cStep[9]=CHECK_INTERRUPT
+    I2cStep[10]=CHECK_ACK      
+    I2cStep[11]=SENT_STOP
+    I2cStep[12]=CHECK_INTERRUPT
+    I2cStep[13]=WAIT_WRITE
+    I2cStep[14]=PROCESS_DONE    
+return
+
+'hier eeprom
+Set_parameters_I2C_read_M24LC024:
+    i2ccont=M24LC024_ADDRESS
+    WP=YES
+    WP1=YES                      'Switch on write protection
+    I2cStep[0]=SENT_START
+    I2cStep[1]=CHECK_INTERRUPT
+    I2cStep[2]=SENT_ADDRESS_W
+    I2cStep[3]=CHECK_INTERRUPT
+    I2cStep[4]=CHECK_ACK
+    I2cStep[5]=SENT_COMMANDCODE
+    I2cStep[6]=CHECK_INTERRUPT
+    I2cStep[7]=CHECK_ACK      
+    I2cStep[8]=REPEATED_START
+    I2cStep[9]=CHECK_INTERRUPT
+    I2cStep[10]=SENT_ADDRESS_R
+    I2cStep[11]=CHECK_INTERRUPT
+    I2cStep[12]=CHECK_ACK
+    I2cStep[13]=ENABLE_RECEIVING
+    I2cStep[14]=CHECK_INTERRUPT    
+    I2cStep[15]=RECEIVE_DATA      'Byte received
+    I2cStep[16]=SENT_NACK
+    I2cStep[17]=CHECK_INTERRUPT      
+    I2cStep[18]=SENT_STOP
+    I2cStep[19]=CHECK_INTERRUPT             
+    I2cStep[20]=PROCESS_DONE
 return
 
 Set_parameters_I2C_write_LM75:
@@ -2770,14 +3066,29 @@ I2C_Instruction:
     elseif I2cStep[Fase]=REPEATED_START then   
         i2cModeOld=i2cMode      'Check_interrupt is needed as a next step
         SSPCON2.1=1             'Repeated start
-        instruction_done=1      'instruction executed      
-     elseif I2cStep[Fase]=PROCESS_DONE then
+        instruction_done=1      'instruction executed 
+    elseif I2cStep[Fase]=WAIT_WRITE then
+        pause 8                 'Make sure write is done before continuing
+        WP=YES                  'Switch on write protection after writing
+        WP1=YES
+        instruction_done=1      'instruction executed              
+    elseif I2cStep[Fase]=PROCESS_DONE then
         i2cMode=0
         T0CON.7=0               'stop timer1
         err=0
         i2cerror=0    
     endif
     if instruction_done=1 then Fase=Fase+1
+return
+
+'hier eeprom
+write_eeprom:
+    if Ext_eeprom_found==YES then
+        i2cCommandCode=eeprom_address                   'Eeprom address
+        i2cCommandData=eeprom_data                      'Eeprom data
+        gosub Set_parameters_I2C_write_M24LC024
+        gosub I2C_read_write
+    endif
 return
 
 I2C_read_write:
