@@ -29,7 +29,7 @@ DEFINE OSC 40
 
 VERSION                     con     6
 FIRMWARE                    con     0
-BUILT                       con     27                                                      
+BUILT                       con     28                                                      
 
 DEFINE  USE_LOWPRIORITY  1
 define  NO_CLRWDT        1     ; No automatic clear watchdog timer
@@ -568,7 +568,7 @@ gosub Read_startup_data_eeprom
 CLEARWDT
 
 gosub detect_i2c_chips
-gosub check_startupreset  'check if reset 
+gosub check_startupreset  'check if action button has been pressed during startup 
 
 out=0         'All outputs off
 OutOld=0
@@ -582,17 +582,11 @@ gosub AllRelaysOff
 'gosub Relais_On_off        'Switch on/off relays
 'high led_logo
 
-gosub Nightrider_on_frontpanel
+'gosub Nightrider_on_frontpanel
 gosub All_leds_on
 CLEARWDT
 pause 500
-gosub Indicate_mode_on_frontpanel
-'led_st_red=LED_OFF
-'led_st_green=LED_OFF
-'status_led_onoff=LED_ON             'general status of the led (ON - blinking or normal, OFF) 
-'status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
-'status_led_blink=no                 'Led must blink or not
-'status_led_color=GREen              'Color of the led
+'gosub Indicate_mode_on_frontpanel
 status_led_counter=0                'only used when blinking is ON (then set at 77 (=500ms))
 gosub Switch_Shutter_off_after_startup
 'gosub Set_status_led
@@ -684,12 +678,11 @@ Timer2:   'interrupt every 6,5ms
     if module_indicate_fl_timer>0 then module_indicate_fl_timer=module_indicate_fl_timer-1
     if bus_comm_error_timeout>0 then  bus_comm_error_timeout=bus_comm_error_timeout-1
     if bus_comm_lost_timeout>0 then bus_comm_lost_timeout=bus_comm_lost_timeout-1             
-    if timer=20 then 
-        'high led_logo
+    if timer=15 then 
         OutAlertOn=0
         if OutAlertCounter>0 then OutAlertUpdate=1
     endif  
-    if timer>249 then
+    if timer>77 then
         timer=0
         'low led_logo
         OutAlertOn=1
@@ -779,12 +772,14 @@ return
 
 Clear_id:
     for i=0 to 6
-        write i,255             
+        write i,255
+        pause 10             
         eeprom_address=i            'addressing
         eeprom_data=255             'Eeprom data
         gosub write_eeprom                     
     next i
     hserout2 ["Clear ID",13,10]
+    read 130,DummyByte      'set pointer to place 130, if brown out or others happens, the current addresses won't be affected 
 return
 
 Interprete_broadcast:
@@ -916,7 +911,7 @@ return
 'hier module indicate
 Module_indicate_on:
     module_indicate_status=STATUS_ON
-    module_indicate_timer=4687  '30000ms/6.4ms=4687
+    module_indicate_timer=9375  '60000ms/6.4ms=9375
     module_indicate_fl_timer=20
     hserout2 ["Module indicate ON",13,10]   
 return
@@ -988,34 +983,42 @@ Test_instructions:
             Serial_errors=stackser1[14]
             hserout2 ["Data Received: ",dec Serial_year," ",dec Serial_month," ",dec Serial_day," ",dec Serial_prod_company," ",dec serial_number," ",dec Serial_errors,13,10]
             write INT_EEP_YEAR_ADDRESS,Serial_year
+            pause 10
             eeprom_address=INT_EEP_YEAR_ADDRESS         'addressing
             eeprom_data=Serial_year                     'Eeprom data
             gosub write_eeprom             
             write INT_EEP_MONTH_ADDRESS,Serial_month
+            pause 10
             eeprom_address=INT_EEP_MONTH_ADDRESS        'addressing
             eeprom_data=Serial_month                    'Eeprom data
             gosub write_eeprom             
             write INT_EEP_DAY_ADDRESS,Serial_day
+            pause 10
             eeprom_address=INT_EEP_DAY_ADDRESS          'addressing
             eeprom_data=Serial_day                      'Eeprom data
             gosub write_eeprom             
             write INT_EEP_PROD_ADDRESS,Serial_prod_company
+            pause 10
             eeprom_address=INT_EEP_PROD_ADDRESS         'addressing
             eeprom_data=Serial_prod_company             'Eeprom data
             gosub write_eeprom             
             write INT_EEP_SER_MSB_ADDRESS,Serial_number.byte1
+            pause 10
             eeprom_address=INT_EEP_SER_MSB_ADDRESS      'addressing
             eeprom_data=Serial_number.byte1             'Eeprom data
             gosub write_eeprom             
             write INT_EEP_SER_LSB_ADDRESS,Serial_number.byte0
+            pause 10
             eeprom_address=INT_EEP_SER_LSB_ADDRESS      'addressing
             eeprom_data=Serial_number.byte0             'Eeprom data
             gosub write_eeprom            
             write INT_EEP_ERR_ADDRESS,Serial_errors
+            pause 10
             eeprom_address=INT_EEP_ERR_ADDRESS          'addressing
             eeprom_data=Serial_errors                   'Eeprom data
             gosub write_eeprom 
             gosub Print_serial_number
+            read 130,DummyByte      'set pointer to place 130, if brown out or others happens, the current addresses won't be affected 
         endif                
         high RS485_mode     'send mode
         hserout ["RC",0,0,0,0,"P",stackser1[7],Serial_year,Serial_month,Serial_day,Serial_prod_company,serial_number.byte1,serial_number.byte0,Serial_errors,13,10,13,10]
@@ -1093,9 +1096,11 @@ Check_output_module:
                             gosub Check_OutConfig
                             'hserout2 ["New Outconfig: ",bin8 OutConfig,13,10]
                             write 6,OutConfig
+                            pause 10
                             eeprom_address=6                                'addressing
                             eeprom_data=OutConfig                           'Eeprom data
                             gosub write_eeprom
+                            read 130,DummyByte      'set pointer to place 130, if brown out or others happens, the current addresses won't be affected 
                         endif
                         OutRec=Stackser1[5] 
                         'hserout2 ["0:out:",bin8 Out," OutRec:",bin8 OutRec,13,10]                       
@@ -1196,15 +1201,19 @@ Remote_eeprom_write:
             read rs485_eeprom_address,x
             if x==255 then      'If not programmed then it can be modified
                 write rs485_eeprom_address,rs485_eeprom_byte
+                pause 10
                 eeprom_address=rs485_eeprom_address             'addressing
                 eeprom_data=rs485_eeprom_byte                   'Eeprom data
                 gosub write_eeprom
+                read 130,DummyByte      'set pointer to place 130, if brown out or others happens, the current addresses won't be affected 
             endif
         else
             write rs485_eeprom_address,rs485_eeprom_byte
+            pause 10
             eeprom_address=rs485_eeprom_address                 'addressing
             eeprom_data=rs485_eeprom_byte                       'Eeprom data
-            gosub write_eeprom             
+            gosub write_eeprom
+            read 130,DummyByte      'set pointer to place 130, if brown out or others happens, the current addresses won't be affected              
         endif
         read rs485_eeprom_address,rs485_eeprom_byte
     endif                        
@@ -1736,20 +1745,20 @@ check_startupreset:
     next s
     if test=1 then
         gosub clear_id
-        for s=0 to 3
+        for s=0 to 1
             'led_st_red=LED_ON
             'led_st_green=LED_ON
             status_led_onoff=LED_ON             'general status of the led (ON - blinking or normal, OFF) 
-            status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
-            status_led_blink=no                 'Led must blink or not
-            status_led_color=GREEN              'Color of the led          
+            status_led_current_onoff=LED_ON     'current status of the led (when blinking, this variable will toggle)
+            status_led_blink=NO                 'Led must blink or not
+            status_led_color=ORANGE             'Color of the led          
             gosub Set_status_led
             pause 500
             'led_st_red=LED_OFF
             'led_st_green=LED_OFF
             status_led_onoff=LED_OFF            'general status of the led (ON - blinking or normal, OFF) 
-            status_led_current_onoff=led_oFF    'current status of the led (when blinking, this variable will toggle)
-            status_led_blink=no                 'Led must blink or not
+            status_led_current_onoff=LED_OFF    'current status of the led (when blinking, this variable will toggle)
+            status_led_blink=NO                 'Led must blink or not
             status_led_color=GREEN              'Color of the led          
             gosub Set_status_led
             pause 500 
@@ -1808,6 +1817,7 @@ check_inputs2:
             'if Mod_ID1=255 and Mod_ID2=255 and Mod_ID3=255 then
                 if Button1Timer2>3 and Button1Timer2<50 then          'If button is released
                     if OutAlertCounter=0 then                           'Was not yet in mode to toggle output with init button
+                        indicateInitButton=0
                         OutAlert=%00000001<<indicateInitButton
                         OutAlertCounter=4500           
                         gosub Set_led_init_button                         'During change of init output, update leds
@@ -1856,53 +1866,52 @@ return
 
 'hier i2c
 All_leds_on:
-    i2cdata=0
-    gosub write_leds
-    'led_st_red=LED_OFF
-    'led_st_green=LED_OFF
-    status_led_onoff=LED_OFF            'general status of the led (ON - blinking or normal, OFF) 
-    status_led_current_onoff=led_oFF    'current status of the led (when blinking, this variable will toggle)
-    status_led_blink=no                 'Led must blink or not
-    status_led_color=GREen              'Color of the led   
-    gosub Set_status_led
-    pause 200
-    i2cdata=255
-    gosub write_leds
-    'led_st_red=LED_ON
-    'led_st_green=LED_ON
-    status_led_onoff=LED_ON             'general status of the led (ON - blinking or normal, OFF) 
-    status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
-    status_led_blink=no                 'Led must blink or not
-    status_led_color=orange             'Color of the led   
-    gosub Set_status_led    
-return
-
-'hier i2c
-Indicate_mode_on_frontpanel:
-    for i=0 to 4
-        if Mod_ID0="O" then   'output module
+    for i=0 to 9
         i2cdata=0
-        else                  'Restricted Output module (for curtains and orthers)
-        i2cdata=170
-        endif  
-        gosub write_leds
-        pause 75
-        i2cdata=255
+        status_led_onoff=LED_ON             'general status of the led (ON - blinking or normal, OFF) 
+        status_led_current_onoff=LED_ON     'current status of the led (when blinking, this variable will toggle)
+        status_led_blink=NO                 'Led must blink or not
+        status_led_color=ORANGE             'Color of the led 
+        gosub Set_status_led        
         gosub write_leds
         pause 50
-    next i  
-    OutalertUpdate=1   'Set leds back in normal state
+        i2cdata=255
+        status_led_onoff=LED_OFF            'general status of the led (ON - blinking or normal, OFF) 
+        status_led_current_onoff=LED_OFF    'current status of the led (when blinking, this variable will toggle)
+        status_led_blink=NO                 'Led must blink or not
+        status_led_color=ORANGE             'Color of the led   
+        gosub Set_status_led        
+        gosub write_leds
+        pause 50 
+    next i   
 return
 
 'hier i2c
-Nightrider_on_frontpanel:
-    for i=0 to 7
-        i2cdata=255^(%00000001<<i)  
-        gosub write_leds
-        pause 50
-    next i      
-    OutalertUpdate=1   'Set leds back in normal state
-return
+'Indicate_mode_on_frontpanel:
+'    for i=0 to 4
+'        if Mod_ID0="O" then   'output module
+'        i2cdata=0
+'        else                  'Restricted Output module (for curtains and orthers)
+'        i2cdata=170
+'        endif  
+'        gosub write_leds
+'        pause 75
+'        i2cdata=255
+'        gosub write_leds
+'        pause 50
+'    next i  
+'    OutalertUpdate=1   'Set leds back in normal state
+'return
+
+'hier i2c
+'Nightrider_on_frontpanel:
+'    for i=0 to 7
+'        i2cdata=255^(%00000001<<i)  
+'        gosub write_leds
+'        pause 50
+'    next i      
+'    OutalertUpdate=1   'Set leds back in normal state
+'return
 
 rs485_send_status_output_changed:
     rs485_length=15             'Payload length
@@ -2035,26 +2044,44 @@ activate_device:
                     hserout2 ["CORE: CRC ",dec StackSer1[16]," ",dec StackSer1[17]," ",dec CRC.byte1," ",dec CRC.byte0,13,10]
                     Mod_NE="E"
                     write 0,Mod_NE              'Mode_ID in eeprom controller
+                    pause 10
+                    write 0,Mod_NE
+                    pause 10
                     eeprom_address=0            'addressing
                     eeprom_data=Mod_NE          'Eeprom data
                     gosub write_eeprom                     
                     write 1,Mod_ID0
+                    pause 10
+                    write 1,Mod_ID0
+                    pause 10
                     eeprom_address=1            'addressing
                     eeprom_data=Mod_ID0         'Eeprom data
                     gosub write_eeprom                    
                     write 2,Mod_ID1
+                    pause 10
+                    write 2,Mod_ID1
+                    pause 10
                     eeprom_address=2            'addressing
                     eeprom_data=Mod_ID1         'Eeprom data
                     gosub write_eeprom                    
                     write 3,Mod_ID2
+                    pause 10
+                    write 3,Mod_ID2
+                    pause 10
                     eeprom_address=3            'addressing
                     eeprom_data=Mod_ID2         'Eeprom data
                     gosub write_eeprom                    
                     write 4,Mod_ID3
+                    pause 10
+                    write 4,Mod_ID3
+                    pause 10
                     eeprom_address=4            'addressing
                     eeprom_data=Mod_ID3         'Eeprom data
                     gosub write_eeprom                    
                     write 10,CORE
+                    pause 10
+                    write 10,CORE
+                    pause 10
                     eeprom_address=10           'addressing
                     eeprom_data=CORE            'Eeprom data
                     gosub write_eeprom                    
@@ -2064,6 +2091,7 @@ activate_device:
                     'status_led_blink=no                 'Led must blink or not
                     'status_led_color=GREen              'Color of the led                   
                     gosub rs485_send_SI 
+                    read 130,DummyByte      'set pointer to place 130, if brown out or others happens, the current addresses won't be affected 
                     'gosub Set_status_led                    
                 endif
             elseif StackSer1[15]="C" then   'Checksum is included in the message (Traditional Master), otherwise ignore
@@ -2072,30 +2100,49 @@ activate_device:
                     hserout2 ["MASTER: CRC ",dec StackSer1[16]," ",dec StackSer1[17]," ",dec CRC.byte1," ",dec CRC.byte0,13,10]
                     Mod_NE="E"
                     write 0,Mod_NE              'Mode_ID in eeprom controller
+                    pause 10
+                    write 0,Mod_NE
+                    pause 10
                     eeprom_address=0            'addressing
                     eeprom_data=Mod_NE          'Eeprom data
                     gosub write_eeprom                     
                     write 1,Mod_ID0
+                    pause 10
+                    write 1,Mod_ID0
+                    pause 10
                     eeprom_address=1            'addressing
                     eeprom_data=Mod_ID0         'Eeprom data
                     gosub write_eeprom                    
                     write 2,Mod_ID1
+                    pause 10
+                    write 2,Mod_ID1
+                    pause 10
                     eeprom_address=2            'addressing
                     eeprom_data=Mod_ID1         'Eeprom data
                     gosub write_eeprom                    
                     write 3,Mod_ID2
+                    pause 10
+                    write 3,Mod_ID2
+                    pause 10
                     eeprom_address=3            'addressing
                     eeprom_data=Mod_ID2         'Eeprom data
                     gosub write_eeprom                    
                     write 4,Mod_ID3
+                    pause 10
+                    write 4,Mod_ID3
+                    pause 10
                     eeprom_address=4            'addressing
                     eeprom_data=Mod_ID3         'Eeprom data
                     gosub write_eeprom                    
                     write 10,TRADITIONAL_MASTER
+                    pause 10
+                    write 10,TRADITIONAL_MASTER
+                    pause 10
                     eeprom_address=10               'addressing
                     eeprom_data=TRADITIONAL_MASTER  'Eeprom data
                     gosub write_eeprom                 
                     Master_type=TRADITIONAL_MASTER
+                    read 130,DummyByte      'set pointer to place 130, if brown out or others happens, the current addresses won't be affected 
                 endif
             endif          
         else
@@ -2531,6 +2578,7 @@ Write_sync_data:
             write i,data_byte2
             'delete
             hserout2 ["Write Int Eeprom ",dec3 i,"=",dec data_byte2,13,10]
+            read 130,DummyByte      'set pointer to place 130, if brown out or others happens, the current addresses won't be affected 
         endif                    
     endif
 return
@@ -2565,22 +2613,28 @@ Read_startup_data_eeprom:
     read 64,x    'Read Hardware version
     if x<>hardware then 
         write 64,hardware
+        pause 10
     endif
     read 65,x    'Read Major firmware version
     if x<>version then 
         write 65,version
+        pause 10
     endif
     read 66,x    'Read Minor firmware version
     if x<>firmware then 
         write 66,firmware
+        pause 10
     endif
     read 67,x    'Read Minor firmware version
     if x<>built then 
         write 67,built
+        pause 10
     endif 
     read 74,x    'Read Flashmode variable and put on 5 so the bootloader knows the app is running, 5 retries 
     write 74,5
+    pause 10
     write 75,0    'Set Bootloader time on 0 seconds
+    pause 10
     read INT_EEP_YEAR_ADDRESS,Serial_year
     read INT_EEP_MONTH_ADDRESS,Serial_month
     read INT_EEP_DAY_ADDRESS,Serial_day
