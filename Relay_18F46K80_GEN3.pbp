@@ -29,7 +29,7 @@ DEFINE OSC 40
 
 VERSION                     con     6
 FIRMWARE                    con     0
-BUILT                       con     29
+BUILT                       con     30
 
 DEFINE  USE_LOWPRIORITY  1
 define  NO_CLRWDT        1     ; No automatic clear watchdog timer
@@ -897,9 +897,12 @@ return
 
 'hier module indicate
 Module_indicate_off:
+    hserout2 ["Mod indicate off",13,10]                                                                 
+    OutAlertOn=0                    'Normal led condition 
+    OutAlert=0
+    OutAlertCounter=0
     if module_indicate_status==STATUS_ON then   
         module_indicate_status=STATUS_OFF
-        OutAlertOn=0                    'Normal led condition 
         x=~out
         gosub set_leds
         gosub write_leds        
@@ -1613,6 +1616,7 @@ write_output:
     if indicate<8 then
         OutAlert=%00000001<<indicate
         OutAlertCounter=4615 '30 seconden        
+        hserout2["OutAlert is set: ", bin8 OutAlert, " Set to 30 seconds", 13, 10]
     endif
 return
 
@@ -1685,6 +1689,7 @@ return
 '    if indicate<8 then
 '        OutAlert=%00000001<<indicate
 '        OutAlertCounter=4615 '30 seconden
+'        hserout2["OutAlert is set: ", bin8 OutAlert, " Set to 30 seconds", 13, 10]
 '    endif
 '    if Mod_ID1=255 and Mod_ID2=255 and Mod_ID3=255 then   'Module is not configured
 '        write 5,~out                                        'remember the outputs that are on
