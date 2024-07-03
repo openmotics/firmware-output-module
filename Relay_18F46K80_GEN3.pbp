@@ -28,8 +28,8 @@
 DEFINE OSC 40
 
 VERSION                     con     6
-FIRMWARE                    con     0
-BUILT                       con     30
+FIRMWARE                    con     0                                                        
+BUILT                       con     31                                                      
 
 DEFINE  USE_LOWPRIORITY  1
 define  NO_CLRWDT        1     ; No automatic clear watchdog timer
@@ -602,9 +602,7 @@ CLEARWDT
 mainloop:
     CLEARWDT
     gosub interprete_serial    'check information coming from the RS485 bus
-    gosub check_LedAction      'Set leds correctly
     gosub check_RelayAction    'When a Relay coil is activated, switch off after +/-40ms
-    gosub Display_AlertLeds    'Check if any leds needs to flash, normal or inverted state
     gosub check_SerialErrors   'Check if serial errors happened
     if mode="L" then           
         gosub check_inputs2    'check if top button or init button is pressed
@@ -616,6 +614,8 @@ mainloop:
     gosub Relais_On_off        'Switch on/off relays
     gosub check_button_pressed 'Check button pressed
     'led change
+    gosub check_LedAction      'Set leds correctly
+    gosub Display_AlertLeds    'Check if any leds needs to flash, normal or inverted state
     gosub check_status_led      'Check status led and set correctly, also set led linked to health status of the module
     'hier module indicate
     gosub Check_module_indicate
@@ -745,7 +745,7 @@ Interprete_Serial: 'Interprete data coming from the RS485 bus
         if pointerser1>6 then
             bus_comm_lost_timeout=6250        
             'delete
-            'hserout2 ["Message received ",dec StackSer1[0]," ",dec StackSer1[1]," ",dec StackSer1[2]," ",dec StackSer1[3]," ",dec StackSer1[4]," ",dec StackSer1[5]," Mode=",dec mode,13,10]   
+            'hserout2 ["Message received ",dec StackSer1[0]," ",dec StackSer1[1]," ",dec StackSer1[2]," ",dec StackSer1[3]," ",dec StackSer1[4]," ",dec StackSer1[5]," ",dec StackSer1[6]," ",dec StackSer1[7]," Mode=",dec mode,13,10]   
             if stackser1[0]="O" then  'output module
                 gosub Check_Output_Module  
             elseif stackser1[0]=0 and stackser1[1]=0 and stackser1[2]=0 and stackser1[3]=0 then    'Broadcast message
@@ -783,7 +783,8 @@ Clear_id:
 return
 
 Interprete_broadcast:
-    'hserout2 ["Broadcast received ",dec StackSer1[4]," ",dec StackSer1[5]," ",dec StackSer1[6],13,10]
+    'delete
+    'hserout2 ["Broadcast received ",dec StackSer1[4]," ",dec StackSer1[5]," ",dec StackSer1[6]," ",dec StackSer1[7],13,10]
     if stackser1[4]="L" and stackser1[5]="L" then   'Bus in Live mode
         if mode="I" then
             'status_led_onoff=LED_ON             'general status of the led (ON - blinking or normal, OFF) 
@@ -850,36 +851,12 @@ Interprete_broadcast:
         PowerSafe=1
         OutAlertUpdate=1
     elseif StackSer1[4]=="S" and StackSer1[5]=="U" then     'Start Up broadcast
-        startup_master=YES                                      'Put startup_master to NO when first direct message from Master to this module is received
-        'led change
-        'if Mod_NE=="E" then
-        '    'led_st_red=LED_ON
-        '    'led_st_green=LED_OFF
-        '    status_led_onoff=LED_ON             'general status of the led (ON - blinking or normal, OFF) 
-        '    status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
-        '    status_led_blink=no                 'Led must blink or not
-        '    status_led_color=RED                'Color of the led                               
-        'else
-        '    'led_st_red=LED_OFF
-        '    'led_st_green=LED_OFF
-        '    status_led_onoff=LED_OFF            'general status of the led (ON - blinking or normal, OFF) 
-        '    status_led_current_onoff=led_oFF    'current status of the led (when blinking, this variable will toggle)
-        '    status_led_blink=no                 'Led must blink or not
-        '    status_led_color=GREen              'Color of the led          
-        'endif
-        'gosub Set_status_led         
+        startup_master=YES                                      'Put startup_master to NO when first direct message from Master to this module is received        
     elseif stackser1[4]="T" and stackser1[5]="M" then   'Instruction only requested in Test Mode
+        'delete
+        'hserout2 ["Test instruction",13,10]
         indicate=255
         Powersafe=0
-        'status_led_onoff=LED_ON             'general status of the led (ON - blinking or normal, OFF) 
-        'status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
-        'status_led_blink=no                 'Led must blink or not
-        'if status_led_color==GREEN then     'Color of the led
-        '    status_led_color=RED
-        'else
-        '    status_led_color=GREEN
-        'endif               
-        'gosub Set_status_led
         status_mode=TEST_MODE_LED_ON
         Gosub Test_instructions
         
@@ -897,16 +874,16 @@ return
 
 'hier module indicate
 Module_indicate_off:
-    hserout2 ["Mod indicate off",13,10]                                                                 
+    hserout2 ["Module indicate OFF",13,10]
     OutAlertOn=0                    'Normal led condition 
     OutAlert=0
-    OutAlertCounter=0
+    Outalertcounter=0
     if module_indicate_status==STATUS_ON then   
         module_indicate_status=STATUS_OFF
+        outAlertOn=0
         x=~out
         gosub set_leds
         gosub write_leds        
-        hserout2 ["Module indicate OFF",13,10]
         'leds back to normal state
     endif    
 return
@@ -965,6 +942,8 @@ return
 
 'testmode
 Test_instructions:
+    'delete
+    'hserout2 ["Test ",dec stackser1[4]," ",dec stackser1[5]," ",dec stackser1[6]," ",dec stackser1[7],13,10]
     if stackser1[6]=="V" then  'Firmware version
         test_mode=YES
         high RS485_mode     'send mode
@@ -974,6 +953,38 @@ Test_instructions:
         test_mode=YES
         out=stackser1[7]  
         gosub write_output
+    'hier test 2
+    elseif stackser1[6]=="L" then   'Set FP Leds
+        test_mode=YES
+        if stackser1[7]==0 then     'Set all FP Leds OFF
+            i2cdata=255
+            status_led_onoff=LED_OFF            'general status of the led (ON - blinking or normal, OFF) 
+            status_led_current_onoff=LED_OFF    'current status of the led (when blinking, this variable will toggle)
+            status_led_blink=NO                 'Led must blink or not
+            status_led_color=ORANGE             'Color of the led   
+            gosub Set_status_led        
+            gosub write_leds
+            'delete
+            'hserout2 ["All leds OFF",13,10]        
+        else                        'Set all FP Leds ON
+            i2cdata=0
+            status_led_onoff=LED_ON             'general status of the led (ON - blinking or normal, OFF) 
+            status_led_current_onoff=LED_ON     'current status of the led (when blinking, this variable will toggle)
+            status_led_blink=NO                 'Led must blink or not
+            status_led_color=ORANGE             'Color of the led 
+            gosub Set_status_led        
+            gosub write_leds
+            'delete
+            'hserout2 ["All leds ON",13,10]        
+        endif
+    elseif stackser1[6]=="b" then   'Set Button debug mode
+        test_mode=YES
+        if stackser1[7]==0 then     'Set FP button debug OFF
+        
+        else                        'Set FP button debug ON
+        
+        endif    
+        
     elseif stackser1[6]=="P" then   'Programming Eeprom
         test_mode=YES
         if stackser1[7]==0 then     '0->Write full serial number including date and errors
@@ -1615,8 +1626,8 @@ write_output:
     CurrentOut=out
     if indicate<8 then
         OutAlert=%00000001<<indicate
-        OutAlertCounter=4615 '30 seconden        
-        hserout2["OutAlert is set: ", bin8 OutAlert, " Set to 30 seconds", 13, 10]
+        OutAlertCounter=4615 '30 seconden
+        hserout2["OutAlert is set: ", bin8 OutAlert, " Set to 30 seconds", 13,10]        
     endif
 return
 
@@ -1688,8 +1699,7 @@ return
 '    Outold=out
 '    if indicate<8 then
 '        OutAlert=%00000001<<indicate
-'        OutAlertCounter=4615 '30 seconden
-'        hserout2["OutAlert is set: ", bin8 OutAlert, " Set to 30 seconds", 13, 10]
+'        OutAlertCounter=3077 '20 seconden
 '    endif
 '    if Mod_ID1=255 and Mod_ID2=255 and Mod_ID3=255 then   'Module is not configured
 '        write 5,~out                                        'remember the outputs that are on
@@ -1802,13 +1812,10 @@ check_inputs2:
         PowerSafe=0
         OutalertUpdate=1    
     endif
-    if Butt1=PRESSED then                       'Init button pressed
-        'hserout2 ["Init button pressed",13,10]
-        Button1Pressed=1
-        'if Button1Timer=0 then              'pressed for around 10 seconds to change mode
-        '    gosub Module_type_change
-        'endif
-        'if Mod_ID1=255 and Mod_ID2=255 and Mod_ID3=255 then
+    if test_mode==NO then
+        if Butt1=PRESSED then                       'Init button pressed
+            'hserout2 ["Init button pressed",13,10]
+            Button1Pressed=1
             if Button1Timer2>150 and Button1Timer2<170 and OutAlertCounter>0 then            'Button is pressed for 200 cycles to toggle output
                 Button1Timer2=170
                 z=%00000001<<indicateInitButton
@@ -1816,10 +1823,8 @@ check_inputs2:
                 gosub write_output
                 OutChangedByButton=YES    
             endif
-        'endif  
-    else                                 'Init Button not pressed
-        if Button1Pressed=1 then           'Init button has been released
-            'if Mod_ID1=255 and Mod_ID2=255 and Mod_ID3=255 then
+        else                                 'Init Button not pressed
+            if Button1Pressed=1 then           'Init button has been released
                 if Button1Timer2>3 and Button1Timer2<50 then          'If button is released
                     if OutAlertCounter=0 then                           'Was not yet in mode to toggle output with init button
                         indicateInitButton=0
@@ -1835,10 +1840,10 @@ check_inputs2:
                     endif     
                 endif      
                 Button1Timer2=0
-            'endif
+            endif
+            Button1Pressed=0
+            Button1Timer=750
         endif
-        Button1Pressed=0
-        Button1Timer=750
     endif
 return
 
