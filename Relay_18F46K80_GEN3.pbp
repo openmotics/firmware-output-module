@@ -29,7 +29,7 @@ DEFINE OSC 40
 
 VERSION                     con     6
 FIRMWARE                    con     0                                                        
-BUILT                       con     31                                                      
+BUILT                       con     32
 
 DEFINE  USE_LOWPRIORITY  1
 define  NO_CLRWDT        1     ; No automatic clear watchdog timer
@@ -365,6 +365,8 @@ OutConfig                   var     byte
 OutRecConfig                var     byte
 OutChangedByButton          var     bit
 OutChangedByButton=NO
+OutputStatusReceived        var     bit
+OutputStatusReceived=NO
 OutChanged                  var     byte
 OutDelayMod                 var     BYTE
 OutChangedMod               var     byte
@@ -1082,6 +1084,7 @@ Check_output_module:
                         s1="K"
                         s2=out
                         gosub rs485_send
+                        OutputStatusReceived = YES
                         'status_led_onoff=LED_ON             'general status of the led (ON - blinking or normal, OFF) 
                         'status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
                         'status_led_blink=no                 'Led must blink or not
@@ -1104,7 +1107,7 @@ Check_output_module:
                         OutRecConfig=Stackser1[6]
                         'delete
                         'hserout2 ["Outconfig Old/New: ",bin8 OutConfig," ",bin8 OutRecConfig,13,10]
-                        if OutRecConfig<>OutConfig then 'Output configuration has changed
+                        if OutRecConfig<>OutConfig  and OutputStatusReceived=YES then 'Output configuration has changed
                             'hserout2 ["Outconfig Old/New: ",bin8 OutConfig," ",bin8 OutRecConfig,13,10]
                             OutConfig=OutRecConfig
                             gosub Check_OutConfig
@@ -1118,11 +1121,14 @@ Check_output_module:
                         endif
                         OutRec=Stackser1[5] 
                         'hserout2 ["0:out:",bin8 Out," OutRec:",bin8 OutRec,13,10]                       
-                        if OutChangedByButton==YES or out<>OutRec then      'Frontpanel button used to make changes to the output(s)    
+                        if (OutChangedByButton==YES or out<>OutRec) and OutputStatusReceived=YES then      'Frontpanel button used to make changes to the output(s)    
                             OutChangedByButton=NO
                             gosub rs485_send_status_output_changed
                             hserout2 ["1:out:",bin8 Out," OutRec:",bin8 OutRec,13,10]
                         else                                'No changes have happened to outputs by using the frontpanel button
+                            OutputStatusReceived=YES
+                            out=stackser1[5]
+                            gosub write_output
                             gosub rs485_send_status_no_changes    
                         endif
                         'hserout2 ["-> RS485: Set Status: ",BIN8 outconfig,13,10]
