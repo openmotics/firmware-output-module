@@ -29,7 +29,7 @@ DEFINE OSC 40
 
 VERSION                     con     6
 FIRMWARE                    con     0                                                        
-BUILT                       con     32
+BUILT                       con     33
 
 DEFINE  USE_LOWPRIORITY  1
 define  NO_CLRWDT        1     ; No automatic clear watchdog timer
@@ -503,7 +503,6 @@ GREEN                       con     1
 ORANGE                      con     2
 
 CLEARWDT
-gosub AllRelaysOff
 
 'Define interrupts
 
@@ -576,10 +575,11 @@ out=0         'All outputs off
 OutOld=0
 'gosub write_output
 if Mod_NE=="N" then
+    ' Switch off all relays to make sure they are in a good state after transport
+    gosub AllRelaysOff
     Outeeprom=0
     gosub SwitchAllRelaysStaged
 endif    
-gosub AllRelaysOff
 'gosub Check_Relais
 'gosub Relais_On_off        'Switch on/off relays
 'high led_logo
@@ -1633,6 +1633,7 @@ write_output:
     if indicate<8 then
         OutAlert=%00000001<<indicate
         OutAlertCounter=4615 '30 seconden
+        indicate=255
         hserout2["OutAlert is set: ", bin8 OutAlert, " Set to 30 seconds", 13,10]        
     endif
 return
