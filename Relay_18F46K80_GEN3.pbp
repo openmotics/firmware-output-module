@@ -29,7 +29,7 @@ DEFINE OSC 40
 
 VERSION                     con     6
 FIRMWARE                    con     0                                                        
-BUILT                       con     33
+BUILT                       con     34
 
 DEFINE  USE_LOWPRIORITY  1
 define  NO_CLRWDT        1     ; No automatic clear watchdog timer
@@ -103,6 +103,7 @@ NORMAL_MODE                     con     0   'Status led Green
 NORMAL_MODE_NOT_DISCOVERED      con     1   'Status led OFF
 NORMAL_MODE_BUS_ERRORS          con     2   'Status led Red blinking
 NORMAL_MODE_LOST_COMMUNICATION  con     3   'Status led Red
+NORMAL_MODE_UNKNOWN             con     8   'Status led OFF
 INIT_MODE_DISCOVERED            con     4   'Status led Orange
 INIT_MODE_NOT_DISCOVERED        con     5   'Status led Orange blinking
 TEST_MODE_LED_ON                con     6   'During Test mode, switch status led ON in Green
@@ -110,6 +111,7 @@ TEST_MODE_LED_OFF               con     7   'During Test mode, switch status led
 BUS_OK                          con     0
 BUS_COMMUNICATION_ERRORS        con     1
 BUS_COMMUNICATION_LOST          con     2
+BUS_UNKNOWN                     con     3
 
 'Hier I2C
 SENT_START                  con     0
@@ -201,7 +203,7 @@ Status_mode                 var     byte
 Status_mode_old             var     byte
 Status_mode_old=255
 Bus_mode                    var     byte
-Bus_mode=BUS_OK
+Bus_mode=BUS_UNKNOWN
 bus_comm_error_timeout      var     word
 bus_comm_lost_timeout       var     word
 bus_comm_error_timeout=6250
@@ -924,7 +926,7 @@ Check_bus_health:
         if bus_comm_lost_timeout==0 then
             Bus_mode=BUS_COMMUNICATION_LOST
         endif
-    else
+    elseif bus_mode <> BUS_UNKNOWN then
         Bus_mode=BUS_OK      
     endif
 return
@@ -1067,6 +1069,7 @@ return
 'hier REC_RS485
 Check_output_module:
     if stackser1[0]=Mod_id0 and stackser1[1]=Mod_id1 and stackser1[2]=Mod_id2 and stackser1[3]=Mod_id3 then
+        Bus_mode=BUS_OK      
         'bootloader
         startup_master=NO
         bus_comm_error_timeout=6250        
@@ -2198,6 +2201,11 @@ Configure_status_led:
         status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
         status_led_blink=NO                 'Led must blink or not
         status_led_color=RED                'Color of the led      
+    elseif status_mode==NORMAL_MODE_UNKNOWN then
+        status_led_onoff=LED_OFF             'general status of the led (LED_ON, LED_OFF) 
+        status_led_current_onoff=led_off     'current status of the led (when blinking, this variable will toggle)
+        status_led_blink=NO                 'Led must blink or not
+        status_led_color=RED                'Color of the led      
     elseif status_mode==INIT_MODE_NOT_DISCOVERED then
         status_led_onoff=LED_ON             'general status of the led (LED_ON, LED_OFF) 
         status_led_current_onoff=led_on     'current status of the led (when blinking, this variable will toggle)
@@ -2229,6 +2237,8 @@ Check_LedAction:
                 status_mode=NORMAL_MODE
             elseif Bus_mode==BUS_COMMUNICATION_ERRORS then      'Communication is detected but no communication on this module
                 status_mode=NORMAL_MODE_BUS_ERRORS
+            elseif Bus_mode==BUS_UNKNOWN then                   'Communication status is unknown
+                status_mode=NORMAL_MODE_UNKNOWN
             else                                                'No communication is detected
                 status_mode=NORMAL_MODE_LOST_COMMUNICATION      
             endif
