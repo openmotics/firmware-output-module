@@ -29,7 +29,7 @@ DEFINE OSC 40
 
 VERSION                     con     6
 FIRMWARE                    con     0                                                        
-BUILT                       con     34
+BUILT                       con     35
 
 DEFINE  USE_LOWPRIORITY  1
 define  NO_CLRWDT        1     ; No automatic clear watchdog timer
@@ -276,7 +276,10 @@ WP                          var     PORTA.1   'Write Potect external eeprom/fram
 WP1                         var     PORTA.0
 WP=YES
 WP1=YES
-                                       
+
+shutter_status_received     var     bit
+shutter_status_received = 0
+
 output  RESET_PIN 
 high    RESET_PIN 
 INPUT   INTERRUPT_PIN
@@ -1108,6 +1111,7 @@ Check_output_module:
                     if CRC.byte1==StackSer1[16] and CRC.byte0==StackSer1[17] then   'CRC OK
                         'hserout2 ["CRC OK ",dec CRC.byte1," ",dec CRC.byte0," ",dec StackSer1[16]," ",dec StackSer1[17],13,10]
                         OutRecConfig=Stackser1[6]
+                        shutter_status_received = 1
                         'delete
                         'hserout2 ["Outconfig Old/New: ",bin8 OutConfig," ",bin8 OutRecConfig,13,10]
                         if OutRecConfig<>OutConfig  and OutputStatusReceived=YES then 'Output configuration has changed
@@ -1822,6 +1826,9 @@ check_inputs2:
         PowerSafe=0
         OutalertUpdate=1    
     endif
+    if shutter_status_received == 0 then
+        return
+    endif
     if test_mode==NO then
         if Butt1=PRESSED then                       'Init button pressed
             'hserout2 ["Init button pressed",13,10]
@@ -2240,7 +2247,11 @@ Check_LedAction:
             elseif Bus_mode==BUS_UNKNOWN then                   'Communication status is unknown
                 status_mode=NORMAL_MODE_UNKNOWN
             else                                                'No communication is detected
-                status_mode=NORMAL_MODE_LOST_COMMUNICATION      
+                if shutter_status_received == 0 then
+                    status_mode=NORMAL_MODE
+                else
+                    status_mode=NORMAL_MODE_LOST_COMMUNICATION      
+                endif
             endif
         elseif Mod_NE=="N" then                                 'Not discovered yet
             status_mode=NORMAL_MODE_NOT_DISCOVERED                
