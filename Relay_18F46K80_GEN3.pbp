@@ -29,7 +29,7 @@ DEFINE OSC 40
 
 VERSION                     con     6
 FIRMWARE                    con     0                                                        
-BUILT                       con     35
+BUILT                       con     36
 
 DEFINE  USE_LOWPRIORITY  1
 define  NO_CLRWDT        1     ; No automatic clear watchdog timer
@@ -2243,7 +2243,11 @@ Check_LedAction:
             if Bus_mode==BUS_OK then                            'Bus is OK
                 status_mode=NORMAL_MODE
             elseif Bus_mode==BUS_COMMUNICATION_ERRORS then      'Communication is detected but no communication on this module
-                status_mode=NORMAL_MODE_BUS_ERRORS
+                if shutter_status_received == 0 then
+                    status_mode=NORMAL_MODE      
+                else
+                    status_mode=NORMAL_MODE_BUS_ERRORS
+                endif
             elseif Bus_mode==BUS_UNKNOWN then                   'Communication status is unknown
                 status_mode=NORMAL_MODE_UNKNOWN
             else                                                'No communication is detected
